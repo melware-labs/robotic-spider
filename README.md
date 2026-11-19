@@ -16,6 +16,12 @@
 
 <br />
 
+<p align="center">
+  <img src="docs/assets/demo.gif" alt="La araña persiguiendo el cursor y tejiendo telaraña sobre el título" width="720" />
+</p>
+
+<br />
+
 ## Qué es
 
 Una araña robot de cromo que vive en tu página. Está hecha entera con código (sin archivos `.glb`, sin texturas): geometría procedural de Three.js, patas con cinemática inversa y un cuerpo que reacciona al ratón y al scroll.
@@ -35,6 +41,12 @@ Se usa como un componente de Astro y no pide nada más que un par de clases en t
 | **Túnel lateral** | Sale por un borde y reaparece por el contrario. |
 | **Baja por su hilo** | Si el scroll la deja fuera de pantalla, desciende colgada de un hilo de seda. |
 | **No estorba** | Su canvas tiene `pointer-events: none`: nunca bloquea clics ni hover. |
+
+<br />
+
+## Visor 3D
+
+La araña está exportada como modelo 3D en [`model/robotic-spider.stl`](model/robotic-spider.stl). GitHub lo abre en un visor interactivo: arrastra para girar y usa la rueda para acercar. Muestra la forma, sin el acabado cromado. El archivo también se puede abrir en Blender o en cualquier programa 3D.
 
 <br />
 

@@ -16,6 +16,12 @@
 
 <br />
 
+<p align="center">
+  <img src="docs/assets/demo.gif" alt="The spider chasing the cursor and weaving a web over the title" width="720" />
+</p>
+
+<br />
+
 ## What it is
 
 A chrome robot spider that lives on your page. It is built entirely in code (no `.glb` files, no textures): procedural Three.js geometry, inverse-kinematics legs, and a body that reacts to the mouse and to scrolling.
@@ -35,6 +41,12 @@ It ships as an Astro component and only needs a couple of classes in your HTML.
 | **Side tunnel** | It leaves through one edge and comes back through the opposite one. |
 | **Rappels down** | If scrolling pushes it off screen, it lowers itself on a silk thread. |
 | **Stays out of the way** | Its canvas uses `pointer-events: none`, so it never blocks clicks or hover. |
+
+<br />
+
+## 3D viewer
+
+The spider is exported as a 3D model in [`model/robotic-spider.stl`](model/robotic-spider.stl). GitHub opens it in an interactive viewer: drag to rotate and scroll to zoom. It shows the shape, without the chrome finish. The file also opens in Blender or any 3D program.
 
 <br />
 
