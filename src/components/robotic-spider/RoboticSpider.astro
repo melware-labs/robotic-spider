@@ -1,0 +1,1411 @@
+---
+/**
+ * RoboticSpider: araña robot de cromo, construida entera con código (abdomen esférico con
+ * costura, cabeza en gota con quelíceros, patas finas facetadas con rótulas de diamante y
+ * puntas de aguja, destellos en estrella).
+ *
+ * - <canvas> global fijo, con pointer-events: none: nunca bloquea clics ni hover.
+ * - Patas con cinemática inversa: las puntas se clavan en la página y cada pata da su
+ *   paso cuando se queda atrás, en dos grupos alternos, con un golpe seco de servo.
+ * - Anclada a la página: al hacer scroll sube con ella y se queda donde está. Solo cuando el
+ *   scroll la saca del todo de la vista baja colgada de un hilo de seda (por una columna
+ *   despejada; si no hay, entra por un lateral).
+ * - SOLO en el hero persigue el cursor (giro y velocidad con lerp), puede pasar por encima de
+ *   las letras (HERO_TEXT_FREE) y va tejiendo telaraña: hilos
+ *   blancos largos y combados, maraña pegada al contorno de las letras de los `.anchor-point`
+ *   (por ejemplo, el título del hero). Solo deja seda por donde camina; toda la red va atada a ellos,
+ *   se queda quieta con él al hacer scroll, dura hasta pulsar Suprimir (Delete) y lo sigue si
+ *   la ventana cambia de tamaño. El rastro de seda lo deja por todo el hero, por donde camina.
+ *   Si el cursor se pega a un lateral, sale por él y reaparece por el contrario. Si el ratón
+ *   lleva más de 2 s quieto, deja de perseguirlo y pasea por su cuenta por el hero
+ *   (IDLE_STYLE = "sleep" la hace dormir y "head" la convierte en la cabecita que parpadea).
+ * - En el resto de la página va hacia un lateral, se sale y entra por el lado contrario, como
+ *   en Pac-Man. Si algo le corta el paso busca otra ruta desde donde está, sin volver a empezar.
+ * - Fuera del hero nunca pisa letras: lee dónde hay texto, cards, imágenes y botones (también lo que aún
+ *   está invisible y los elementos fijos), y solo acepta rutas directas (A*) por huecos libres,
+ *   con margen para las patas.
+ * - Del ratón solo copia las coordenadas (listener pasivo): no interfiere con otros scripts.
+ * - El <script> de un componente Astro solo se ejecuta en el navegador.
+ */
+---
+
+<canvas class="robotic-spider__web" aria-hidden="true"></canvas>
+<canvas class="robotic-spider" aria-hidden="true"></canvas>
+<div class="robotic-spider__head" aria-hidden="true">
+  <svg viewBox="0 0 100 100">
+    <defs>
+      <radialGradient id="robotic-spider-chrome" cx="35%" cy="28%" r="80%">
+        <stop offset="0" stop-color="#ffffff" />
+        <stop offset="0.35" stop-color="#d9dde1" />
+        <stop offset="0.7" stop-color="#7b8188" />
+        <stop offset="1" stop-color="#2a2d31" />
+      </radialGradient>
+      <radialGradient id="robotic-spider-iris" cx="50%" cy="50%" r="50%">
+        <stop offset="0" stop-color="#ff6a5c" />
+        <stop offset="1" stop-color="#d4140c" />
+      </radialGradient>
+    </defs>
+    <path class="robotic-spider__fang" d="M42 78c0 8 3 12 5 12s2-5 1-12z" />
+    <path class="robotic-spider__fang" d="M58 78c0 8-3 12-5 12s-2-5-1-12z" />
+    <circle cx="50" cy="50" r="36" fill="url(#robotic-spider-chrome)" />
+    <path d="M50 14v72" stroke="#1b1d20" stroke-width="0.8" opacity="0.35" />
+    <ellipse cx="38" cy="19" rx="9" ry="4" fill="#fff" opacity="0.6" transform="rotate(-20 38 19)" />
+    <circle class="robotic-spider__dot" cx="31" cy="33" r="2.6" />
+    <circle class="robotic-spider__dot" cx="43" cy="28" r="2.6" />
+    <circle class="robotic-spider__dot" cx="57" cy="28" r="2.6" />
+    <circle class="robotic-spider__dot" cx="69" cy="33" r="2.6" />
+    <g class="robotic-spider__eye">
+      <ellipse cx="38" cy="51" rx="10" ry="12" fill="#fff" />
+      <circle cx="39" cy="53" r="6.5" fill="url(#robotic-spider-iris)" />
+      <circle cx="39" cy="53" r="3" fill="#121212" />
+      <circle cx="41.5" cy="50" r="2" fill="#fff" />
+    </g>
+    <g class="robotic-spider__eye">
+      <ellipse cx="62" cy="51" rx="10" ry="12" fill="#fff" />
+      <circle cx="61" cy="53" r="6.5" fill="url(#robotic-spider-iris)" />
+      <circle cx="61" cy="53" r="3" fill="#121212" />
+      <circle cx="63.5" cy="50" r="2" fill="#fff" />
+    </g>
+    <ellipse cx="25" cy="64" rx="6" ry="3.5" fill="#ff8fa3" opacity="0.45" />
+    <ellipse cx="75" cy="64" rx="6" ry="3.5" fill="#ff8fa3" opacity="0.45" />
+    <path d="M45 68q5 4 10 0" fill="none" stroke="#121212" stroke-width="2" stroke-linecap="round" />
+  </svg>
+</div>
+
+<style>
+  .robotic-spider,
+  .robotic-spider__web {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    pointer-events: none;
+  }
+  .robotic-spider {
+    z-index: 50;
+  }
+  .robotic-spider__web {
+    z-index: 49;
+  }
+
+  .robotic-spider__head {
+    position: fixed;
+    left: 0;
+    top: 0;
+    width: var(--size, 60px);
+    height: var(--size, 60px);
+    pointer-events: none;
+    z-index: 51;
+    opacity: 0;
+    will-change: transform, opacity;
+  }
+  .robotic-spider__head svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+    filter: drop-shadow(0 6px 10px rgb(0 0 0 / 0.25));
+  }
+  .robotic-spider__dot {
+    fill: #121212;
+  }
+  .robotic-spider__fang {
+    fill: #3a3e42;
+  }
+  .robotic-spider__eye {
+    transform-box: fill-box;
+    transform-origin: center;
+  }
+  .robotic-spider__head.is-blinking .robotic-spider__eye {
+    animation: robotic-spider-blink 1.1s ease-in-out 0.25s 1;
+  }
+  @keyframes robotic-spider-blink {
+    0%, 20%, 34%, 56%, 100% { transform: scaleY(1); }
+    10%, 45% { transform: scaleY(0.08); }
+  }
+</style>
+
+<script>
+  import * as THREE from "three";
+  import { SPAN_PX, WALK_SPEED, TURN_SPEED, STEP_TIME, BAND, DROP_TIME, CELL, GRID_EVERY, COLLECT_EVERY, OUT_OF_VIEW, SCROLL_SETTLE, CHASE_REPLAN, CHASE_STOP, WEB_STEP, WEB_LINK_RADIUS, WEB_LIFE, WEB_FADE, WEB_MAX_ANCHORS, WEB_COLOR, WEB_SHADE, ANCHOR_SELECTOR, ATTACH_REACH, ATTACH_STEP, KEEP_MAX, FUZZ_RADIUS, FUZZ_PER_STEP, FUZZ_LEN, IDLE_STYLE, SLEEP_AFTER, EDGE_WRAP, SLEEP_SPEED, HEAD_DELAY, HEAD_FADE_SPEED, HEAD_SIZE } from "./config";
+  import { TAU, DEG, angleDiff, lerpAngle, damp, ease, easeOutBack } from "./math";
+  import { SPAN, A_LEN, B_LEN, TIP, HIP_Z, HIP_A, FOOT_A, FOOT_R, studioEnvironment, glowTexture, starTexture, buildSpider, type Leg } from "./model";
+  import { HERO_TEXT_FREE, OBSTACLE_SELECTOR, TEXT_TAGS, FREE, NEAR, BLOCK, range, collectObstacles, Grid } from "./obstacles";
+
+  /* =====================================================================
+     Componente
+     ===================================================================== */
+  function initRoboticSpider(canvas: HTMLCanvasElement) {
+    const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    let renderer: THREE.WebGLRenderer;
+    try {
+      renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true, powerPreference: "high-performance" });
+    } catch {
+      canvas.remove(); // sin WebGL no hay araña; el resto del sitio sigue igual
+      return;
+    }
+    renderer.setClearColor(0x000000, 0);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.35;
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(30, 1, 1, 10000);
+    const TILT = THREE.MathUtils.degToRad(78); // casi cenital
+    const envMap = studioEnvironment(renderer);
+    scene.environment = envMap;
+    const key = new THREE.DirectionalLight(0xffffff, 2.2);
+    key.position.set(-300, 800, 400);
+    scene.add(key);
+
+    /* ---------- Araña ---------- */
+    const model = buildSpider();
+    const yawG = new THREE.Group(); // posición en el suelo, giro y escala
+    const adapt = new THREE.Group(); // marco del modelo (frente +X, arriba +Z) → escena (frente +Z, arriba +Y)
+    adapt.rotation.set(-Math.PI / 2, 0, -Math.PI / 2, "YXZ");
+    adapt.add(model.head);
+    yawG.add(adapt);
+    scene.add(yawG);
+
+    // Destellos en estrella sobre algunas rótulas y puntas
+    const starTex = starTexture();
+    const sparkMat = () => new THREE.SpriteMaterial({ map: starTex, blending: THREE.AdditiveBlending, depthTest: false, transparent: true });
+    const sparks = model.legs.map((l, i) => ({ s: new THREE.Sprite(sparkMat()), l, ph: i * 1.37, at: i % 3 === 0 ? "tip" : "knee" }));
+    sparks.forEach((sp) => scene.add(sp.s));
+    const bodySpark = new THREE.Sprite(sparkMat());
+    scene.add(bodySpark);
+
+    // Hilo de seda
+    const threadGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
+    const threadMat = new THREE.LineBasicMaterial({ color: 0xeef1f7, transparent: true, opacity: 0 });
+    const thread = new THREE.Line(threadGeo, threadMat);
+    thread.frustumCulled = false;
+    scene.add(thread);
+
+    /* ---------- Pantalla ↔ suelo 3D ---------- */
+    const ground = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    const raycaster = new THREE.Raycaster();
+    const ndc = new THREE.Vector2();
+    const tmp = new THREE.Vector3(), tmp2 = new THREE.Vector3(), tmp3 = new THREE.Vector3();
+    let W = 0, H = 0;
+    function screenToGround(x: number, y: number, out: THREE.Vector3) {
+      ndc.set((x / W) * 2 - 1, -(y / H) * 2 + 1);
+      raycaster.setFromCamera(ndc, camera);
+      return raycaster.ray.intersectPlane(ground, out) ?? out.set(0, 0, 0);
+    }
+    function worldToScreen(v: THREE.Vector3) {
+      tmp3.copy(v).project(camera);
+      return { x: ((tmp3.x + 1) / 2) * W, y: ((1 - tmp3.y) / 2) * H };
+    }
+
+    /* ---------- Estado ---------- */
+    let mode: "drop" | "ground" | "tunnel" = "drop"; // tunnel: fuera de pantalla por un lateral, esperando hueco para entrar
+    const page = { x: 0, y: 0 }; // cuerpo, anclado a la página (px de documento)
+    const vel = { x: 0, y: 0 }; // px/s respecto a la página
+    const drop = { x: 0, y: 0, from: 0, to: 0, t: 0, ceil: 0 }; // from/to en px de documento: la bajada también va anclada a la página
+    let threadFade = 0, spread = 1;
+    let route: { x: number; y: number }[] = []; // waypoints en px de documento
+    let dir = Math.random() < 0.5 ? -1 : 1; // sentido de su recorrido horizontal (-1 izquierda, 1 derecha)
+    let tunnelSide = 1; // por qué lateral espera para entrar
+    let tunnelTries = 0; // intentos seguidos de entrar sin encontrar fila libre
+    const decisions: string[] = []; // solo para depurar en desarrollo
+    const note = (m: string) => { if (import.meta.env.DEV) { decisions.push(m); if (decisions.length > 40) decisions.shift(); } };
+    let vdir = 1; // hacia dónde va desplazando su altura en cada pasada (1 abajo, -1 arriba): nunca repite el mismo cruce
+    let servoTimer = 0.8, time = 0, bob = 0;
+    let yaw = 0; // 0 = mirando hacia abajo de la pantalla
+
+    const grid = new Grid();
+    let obstacles: Element[] = [];
+    let fixedObstacles: Element[] = []; // se revisan en cada fotograma, con su posición real
+    let lastCollect = -Infinity, lastGrid = -Infinity, lastPlan = -Infinity;
+    let gridSY = 0; // scroll con el que se midió la cuadrícula: las cuentas con ella usan este valor
+
+    // Scroll: mientras se desplaza la página, la araña se deja llevar sin reaccionar
+    let lastSY = window.scrollY, lastScrollAt = -Infinity;
+
+    // Hero: persecución del cursor
+    const hero = document.querySelector<HTMLElement>(".hero");
+    const pointer = { x: 0, y: 0, has: false, movedAt: 0 };
+    let edgeExit = 0; // -1/1: va saliendo por ese lateral porque el cursor está pegado a él
+    let edgeLock = false; // no vuelve a salir hasta que el cursor se separe del borde
+    let sleepMix = 0; // 0 = despierta, 1 = dormida
+    let sleeping = false;
+    let chasing = false;
+    let chaseGoal = -1; // celda de destino de la ruta actual
+    let lastChase = -Infinity;
+    let chaseRetryAt = 0; // si el cursor quedó fuera de su alcance, cuándo vuelve a intentarlo
+    let idleTime = 0;
+
+    // Telaraña: anclas en px de documento, para que quede pegada a la página. Las que están junto
+    // a un .anchor-point guardan su posición relativa a ese elemento (el): así la red sigue al
+    // nombre aunque cambie el tamaño de la ventana, y esas son permanentes (keep).
+    type Anchor = { x: number; y: number; t: number; el?: Element; ox?: number; oy?: number; keep?: boolean; bead?: boolean };
+    type Strand = { a: Anchor; b: Anchor; born: number; keep: boolean; kind: "trail" | "fuzz" | "radial"; w: number; alpha: number; sag: number; ph: number };
+    const webCanvas = document.querySelector<HTMLCanvasElement>("canvas.robotic-spider__web");
+    const webCtx = webCanvas?.getContext("2d") ?? null;
+    // La telaraña solo se teje en el hero: su lienzo va DENTRO del hero (junto al nombre), así el
+    // navegador lo desplaza con el texto al hacer scroll y la red se queda quieta sobre las letras
+    // (un lienzo fijo se redibuja un fotograma tarde y "nada" sobre el texto).
+    const webHost = document.querySelector<HTMLElement>(".hero .anchor-point")?.closest<HTMLElement>(".hero") ?? null;
+    if (webCanvas && webHost) {
+      if (getComputedStyle(webHost).position === "static") webHost.style.position = "relative";
+      webHost.appendChild(webCanvas);
+      Object.assign(webCanvas.style, { position: "absolute", inset: "0", width: "100%", height: "100%", zIndex: "96" });
+    }
+    let webW = 0, webH = 0; // tamaño del lienzo de la telaraña (px CSS)
+    const anchors: Anchor[] = [];
+    let strands: Strand[] = [];
+    let anchorEls: Element[] = [];
+    const attachPoints: Anchor[] = []; // puntos atados sobre los .anchor-point
+    let lastAttach: { x: number; y: number } | null = null;
+    const rectCache = new Map<Element, DOMRect>(); // un getBoundingClientRect por elemento y fotograma
+    let spinning = false; // si hay hilo de arrastre desde el último ancla
+    let nextWebStep = WEB_STEP; // distancia (con jitter) hasta la proxima ancla: evita que el rastro se repita como un patron al andar recto
+    let dragFade = 0;
+
+    // Cabecita
+    const headEl = document.querySelector<HTMLDivElement>(".robotic-spider__head");
+    let headMix = 0; // 0 = araña, 1 = cabecita
+    let DPR = 1;
+
+    const spanPx = () => (W < 768 ? SPAN_PX.mobile : SPAN_PX.desktop);
+    const sc = () => spanPx() / SPAN;
+    const pad = () => spanPx() * 0.6; // alcance de las patas (+ holgura): margen prohibido alrededor del contenido
+    const bandRows = (): [number, number] => [Math.floor((H * BAND.top) / CELL), Math.floor((H * BAND.bottom) / CELL)];
+    const offLeft = () => -spanPx() * 0.7, offRight = () => W + spanPx() * 0.7; // justo fuera de la pantalla
+
+    function resize() {
+      if (!window.innerWidth || !window.innerHeight) return; // pestaña/panel oculto
+      W = window.innerWidth;
+      H = window.innerHeight;
+      DPR = Math.min(window.devicePixelRatio || 1, 2);
+      renderer.setPixelRatio(DPR);
+      renderer.setSize(W, H, false);
+      camera.aspect = W / H;
+      const dist = H / 2 / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)); // 1 unidad ≈ 1 px en el centro
+      camera.position.set(0, Math.sin(TILT) * dist, Math.cos(TILT) * dist);
+      camera.lookAt(0, 0, 0);
+      camera.updateProjectionMatrix();
+      camera.updateMatrixWorld(); // el raycast de screenToGround la necesita antes del primer render
+      if (webCanvas) {
+        webW = webHost ? webHost.clientWidth : W;
+        webH = webHost ? webHost.clientHeight : H;
+        webCanvas.width = Math.round(webW * DPR);
+        webCanvas.height = Math.round(webH * DPR);
+      }
+      headEl?.style.setProperty("--size", `${Math.round(spanPx() * HEAD_SIZE)}px`);
+      // Telaraña: la atada a los .anchor-point se recoloca sola (posición relativa al elemento);
+      // los hilos sueltos del rastro quedarían descolocados con el nuevo layout, así que se retiran
+      anchorEls = [...document.querySelectorAll(ANCHOR_SELECTOR)];
+      edgeCache.clear(); // el contorno de las letras cambia con el tamaño del texto
+      strands = strands.filter((s) => s.a.el && s.b.el);
+      for (let i = anchors.length - 1; i >= 0; i--) if (!anchors[i].el) anchors.splice(i, 1);
+      spinning = false;
+      lastCollect = lastGrid = -Infinity;
+      route = [];
+      chaseGoal = -1;
+    }
+
+    function refreshGrid(now: number, force = false) {
+      if (!force && now - lastGrid < GRID_EVERY) return false;
+      if (now - lastCollect > COLLECT_EVERY) {
+        const found = collectObstacles(canvas);
+        obstacles = found.all;
+        fixedObstacles = found.fixed;
+        lastCollect = now;
+      }
+      grid.build(obstacles, W, H, pad());
+      gridSY = window.scrollY;
+      lastGrid = now;
+      return true;
+    }
+
+    /** ¿Un punto de pantalla queda a menos de un alcance de patas de algún elemento fijo (encabezado, botón flotante)? */
+    function fixedHit(x: number, y: number) {
+      const m = pad();
+      for (const el of fixedObstacles) {
+        const b = el.getBoundingClientRect();
+        if (b.width < 2 || b.height < 2) continue;
+        if (x > b.left - m && x < b.right + m && y > b.top - m && y < b.bottom + m) return true;
+      }
+      return false;
+    }
+    /** Celda libre también de elementos fijos, con su posición de ahora mismo. */
+    const cellClear = (i: number) => {
+      const p = grid.center(i);
+      return !fixedHit(p.x, p.y + gridSY - window.scrollY);
+    };
+    const toPage = (i: number) => { const p = grid.center(i); return { x: p.x, y: p.y + gridSY }; };
+    const pathLength = (cells: number[]) => {
+      let len = 0;
+      for (let k = 1; k < cells.length; k++) {
+        const a = grid.center(cells[k - 1]), b = grid.center(cells[k]);
+        len += Math.hypot(b.x - a.x, b.y - a.y);
+      }
+      return len;
+    };
+
+    /* ---------- Tramos rectos ----------
+       Sirven para comprobar, al bajar por el hilo o entrar por un lateral, que desde ese hueco
+       tiene por dónde seguir (no es un callejón cerrado). El paseo en sí va con planWander. */
+    const MIN_LEG = 6; // celdas mínimas de un tramo horizontal (si hay menos, toca girar)
+    const MAX_V = 26; // celdas máximas de un tramo vertical
+
+    /** Celdas libres seguidas desde (r, c) en la dirección (dc, dr), sin contar la de partida. */
+    function freeRun(r: number, c: number, dc: number, dr: number, max: number) {
+      let n = 0;
+      for (let k = 1; k <= max; k++) {
+        const rr = r + dr * k, cc = c + dc * k;
+        if (rr < 0 || cc < 0 || rr >= grid.rows || cc >= grid.cols) break;
+        const i = rr * grid.cols + cc;
+        if (!grid.open(i) || !cellClear(i)) break;
+        n = k;
+      }
+      return n;
+    }
+
+    /** ¿Desde el final de un tramo horizontal podrá seguir? (no es un hueco cerrado). */
+    function hasExit(r: number, c: number) {
+      const edge = dir > 0 ? grid.cols - 1 : 0;
+      if (c === edge) return true;
+      return freeRun(r, c, 0, 1, 3) >= 3 || freeRun(r, c, 0, -1, 3) >= 3;
+    }
+
+    /** Tramo posible desde la celda (r, c), o null si es un callejón sin salida. */
+    function legFrom(r: number, c: number): { route: { x: number; y: number }[]; vdir?: number } | null {
+      const edge = dir > 0 ? grid.cols - 1 : 0;
+      const exitPoint = (row: number) => {
+        const p = toPage(row * grid.cols + edge);
+        return [p, { x: dir > 0 ? offRight() : offLeft(), y: p.y }]; // llega al borde y sigue de largo
+      };
+      // 1. En horizontal, en su sentido: hasta el borde, o un tramo que no acabe en un hueco cerrado
+      const n = freeRun(r, c, dir, 0, grid.cols);
+      if (c + dir * n === edge) return { route: exitPoint(r) };
+      if (n >= MIN_LEG && hasExit(r, c + dir * n)) return { route: [toPage(r * grid.cols + c + dir * n)] };
+
+      // 2. Le cortan el paso: gira 90° hacia arriba o abajo. Primero busca un pasillo que llegue
+      //    hasta el borde; si no hay, un tramo con salida. Nunca se mete en un hueco sin salida.
+      const [r0, r1] = bandRows();
+      const runs = [vdir, -vdir].map((v) => {
+        const limit = v > 0 ? r1 - r : r - r0;
+        return { v, m: freeRun(r, c, 0, v, Math.min(MAX_V, Math.max(0, limit))) };
+      });
+      let best: { v: number; j: number } | null = null;
+      for (const full of [true, false]) {
+        for (const { v, m } of runs) {
+          for (let j = 3; j <= m; j++) {
+            const run = freeRun(r + v * j, c, dir, 0, grid.cols);
+            const ok = full ? c + dir * run === edge : run >= MIN_LEG && hasExit(r + v * j, c + dir * run);
+            if (ok) { if (!best || j < best.j) best = { v, j }; break; }
+          }
+        }
+        if (best) break;
+      }
+      if (!best) return null;
+      return { route: [toPage((r + best.v * best.j) * grid.cols + c)], vdir: best.v };
+    }
+
+    /** Entra caminando por un lateral (side -1 izquierda, 1 derecha) a la altura más cercana a preferY
+        con paso hacia dentro, y sigue en el mismo sentido en que salió (como en un túnel). */
+    function enterFromSide(side: number, preferY: number) {
+      refreshGrid(performance.now(), true);
+      dir = -side;
+      spinning = false; // la seda empieza de nuevo aquí: nunca un hilo que cruce toda la pantalla
+      const col = side < 0 ? 0 : grid.cols - 1;
+      const [r0, r1] = bandRows();
+      const want = Math.floor(THREE.MathUtils.clamp(preferY, H * BAND.top, H * BAND.bottom) / CELL);
+      let best = -1;
+      for (let k = 0; k <= r1 - r0 && best < 0; k++) {
+        for (const r of k ? [want - k, want + k] : [want]) {
+          if (r < r0 || r > r1) continue;
+          const i = r * grid.cols + col;
+          if (grid.open(i) && cellClear(i) && freeRun(r, col, dir, 0, MIN_LEG) >= MIN_LEG) { best = i; break; }
+        }
+      }
+      note("entra por " + (side < 0 ? "izq" : "der") + " fila " + (best >= 0 ? Math.floor(best / grid.cols) : "ninguna") + " (pedida y=" + (preferY | 0) + ")");
+      mode = best >= 0 ? "ground" : "tunnel";
+      if (best >= 0) landedAt = performance.now();
+      tunnelSide = side;
+      vel.x = vel.y = 0;
+      threadFade = 0;
+      spread = 1;
+      page.x = side < 0 ? offLeft() : offRight();
+      if (best < 0) { route = []; return; } // sin fila libre: espera fuera de la pantalla
+      const p = toPage(best);
+      page.y = p.y;
+      yaw = side < 0 ? Math.PI / 2 : -Math.PI / 2; // de cara hacia dentro
+      route = [p];
+      placeBody(page.x, page.y - window.scrollY);
+      plantAll();
+    }
+
+    /** Altura (pantalla) del borde inferior de lo que está fijo arriba (encabezado): el hilo cuelga desde ahí. */
+    function ceilingY() {
+      let y = 0;
+      for (const el of fixedObstacles) {
+        const b = el.getBoundingClientRect();
+        if (b.height > 1 && b.top < H * 0.3 && b.bottom < H * 0.4) y = Math.max(y, b.bottom);
+      }
+      return y;
+    }
+
+    /** Zonas libres conectadas: a qué zona pertenece cada celda y cuántas celdas de la franja
+        por la que se mueve tiene cada una (su tamaño útil para pasear). */
+    function regions() {
+      const label = new Int32Array(grid.cost.length).fill(-1);
+      const size: number[] = [];
+      const [r0, r1] = bandRows();
+      for (let s = 0; s < label.length; s++) {
+        if (label[s] >= 0 || !grid.open(s) || !cellClear(s)) continue;
+        const id = size.length;
+        let n = 0;
+        const q = [s];
+        label[s] = id;
+        for (let k = 0; k < q.length; k++) {
+          const cur = q[k];
+          const c = cur % grid.cols, r = (cur - c) / grid.cols;
+          if (r >= r0 && r <= r1) n++;
+          for (const [dc, dr] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+            const nc = c + dc, nr = r + dr;
+            if (nc < 0 || nr < 0 || nc >= grid.cols || nr >= grid.rows) continue;
+            const nb = nr * grid.cols + nc;
+            if (label[nb] < 0 && grid.open(nb) && cellClear(nb)) { label[nb] = id; q.push(nb); }
+          }
+        }
+        size.push(n);
+      }
+      return { label, size };
+    }
+    /** Lo lejos que queda un punto de página de los sitios por los que pasó hace poco. */
+    function freshness(x: number, y: number) {
+      let f = Infinity;
+      for (const t of trail) f = Math.min(f, Math.hypot(t.x - x, t.y - y));
+      return f;
+    }
+
+    /** Baja colgada de un hilo por una columna totalmente despejada hasta un hueco libre: prefiere
+        zonas amplias y por las que no ha pasado hace poco (así nunca cae una y otra vez en el mismo
+        rincón). Sin columna así, entra caminando por el lateral de detrás (nunca cruza contenido). */
+    function startDrop(x: number) {
+      note("drop desde x=" + (x | 0));
+      refreshGrid(performance.now(), true);
+      const ceil = ceilingY();
+      const fromRow = Math.ceil((ceil + pad()) / CELL); // lo de arriba del techo no cuenta: el hilo nace debajo
+      const regs = regions();
+      const roomy = spanPx() * 4; // px: a partir de aquí la zona ya se considera amplia
+      let best = -1, bestScore = -Infinity;
+      for (const frac of [BAND.top + 0.08, 0.34, 0.46, 0.58]) {
+        const targetRow = Math.floor((H * frac) / CELL);
+        for (let c = 0; c < grid.cols; c++) {
+          const i = targetRow * grid.cols + c;
+          if (!grid.open(i) || !cellClear(i)) continue;
+          let crossed = false;
+          for (let r = fromRow; r < targetRow && !crossed; r++) {
+            if (grid.cost[r * grid.cols + c] === BLOCK) crossed = true;
+          }
+          if (crossed) continue;
+          const p = toPage(i);
+          const area = Math.sqrt(regs.size[regs.label[i]]) * CELL; // lado aproximado de la zona, en px
+          const score =
+            Math.min(area, roomy) * 2 + // zonas amplias
+            Math.min(freshness(p.x, p.y), roomy) - // lejos de por donde ya pasó
+            Math.abs(p.x - x) * 0.15 + // algo cerca de donde estaba
+            Math.random() * spanPx(); // y algo de azar
+          if (score > bestScore) { best = i; bestScore = score; }
+        }
+      }
+      if (best < 0) {
+        // sin columna despejada: entra por el lateral de detrás, a otra altura cualquiera (nunca la misma)
+        enterFromSide(-dir, H * (BAND.top + Math.random() * (BAND.bottom - BAND.top)));
+        return;
+      }
+      const p = grid.center(best);
+      mode = "drop";
+      drop.ceil = ceil;
+      drop.x = p.x; drop.from = ceil + window.scrollY; drop.to = p.y + gridSY; drop.t = 0; drop.y = ceil;
+      route = [];
+      vel.x = vel.y = 0;
+    }
+
+    /* ---------- Paseo libre (fuera del hero) ----------
+       Cada vez elige un destino nuevo al azar en la zona visible: lejos de los sitios por los que
+       ya pasó, a una distancia media y sin dar media vuelta. Va hasta él con A* rodeando el
+       contenido y, al llegar, a veces hace una pausa corta. Nunca repite un recorrido. */
+    const trail: { x: number; y: number }[] = []; // destinos y puntos recientes (px de documento)
+    let lastTrail = -Infinity, restUntil = 0, landedAt = -Infinity;
+    function remember(p: { x: number; y: number }) {
+      trail.push(p);
+      if (trail.length > 24) trail.shift();
+    }
+    /** Celdas libres a las que puede llegar caminando desde here (sin pisar contenido). */
+    function reachable(here: number) {
+      const seen = new Uint8Array(grid.cost.length);
+      const out = [here];
+      seen[here] = 1;
+      for (let q = 0; q < out.length; q++) {
+        const cur = out[q];
+        const c = cur % grid.cols, r = (cur - c) / grid.cols;
+        for (const [dc, dr] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          const nc = c + dc, nr = r + dr;
+          if (nc < 0 || nr < 0 || nc >= grid.cols || nr >= grid.rows) continue;
+          const n = nr * grid.cols + nc;
+          if (!seen[n] && grid.open(n) && cellClear(n)) { seen[n] = 1; out.push(n); }
+        }
+      }
+      return out;
+    }
+
+    /** Su hueco es demasiado pequeño para pasear: sale por el lateral al que pueda llegar
+        (el más cercano) y entrará por el otro lado a otra altura. false si no toca ninguno. */
+    function leaveBySide(here: number, cells: number[]) {
+      const hp = grid.center(here);
+      let best = -1, bestD = Infinity;
+      for (const i of cells) {
+        const c = i % grid.cols;
+        if (c !== 0 && c !== grid.cols - 1) continue;
+        const p = grid.center(i);
+        const d = Math.hypot(p.x - hp.x, p.y - hp.y);
+        if (d < bestD) { bestD = d; best = i; }
+      }
+      if (best < 0) return false;
+      const cells2 = grid.path(here, best);
+      if (!cells2) return false;
+      const edge = toPage(best);
+      const side = best % grid.cols === 0 ? -1 : 1;
+      route = [...cells2.slice(1).map(toPage), { x: side < 0 ? offLeft() : offRight(), y: edge.y }];
+      note("sale por " + (side < 0 ? "izq" : "der"));
+      return true;
+    }
+
+    function planWander(here: number) {
+      const [r0, r1] = bandRows();
+      const hp = grid.center(here);
+      const reach = spanPx() * 4.5; // distancia de paseo preferida
+      const area = reachable(here);
+      const inBand = area.filter((i) => { const r = Math.floor(i / grid.cols); return r >= r0 && r <= r1; });
+      let far = inBand.filter((i) => { const p = grid.center(i); return Math.hypot(p.x - hp.x, p.y - hp.y) >= spanPx() * 2; });
+      // Paseando por el hero (ratón quieto), sus rutas se quedan dentro del hero
+      if (hero && spiderInHero(hp.y + gridSY - window.scrollY)) {
+        const hb = hero.getBoundingClientRect();
+        const inHero = far.filter((i) => { const q = grid.center(i); const y = q.y + gridSY - window.scrollY; return y > Math.max(hb.top, ceilingY()) + pad() && y < hb.bottom - pad(); });
+        if (inHero.length >= 12) far = inHero;
+      }
+      // Hueco demasiado pequeño o un pasillo estrecho: pasear ahí sería ir y volver por el mismo sitio
+      let minC = Infinity, maxC = -Infinity, minR = Infinity, maxR = -Infinity;
+      for (const i of inBand) {
+        const c = i % grid.cols, r = Math.floor(i / grid.cols);
+        minC = Math.min(minC, c); maxC = Math.max(maxC, c); minR = Math.min(minR, r); maxR = Math.max(maxR, r);
+      }
+      const wide = (maxC - minC) * CELL, tall = (maxR - minR) * CELL;
+      const corridor = wide < spanPx() * 2.5 || tall < spanPx() * 1.2;
+      if (far.length < 12 || corridor) {
+        // Solo se va si hay otra zona claramente más amplia, y no recién llegada (si no, saldría y volvería)
+        const regs = regions();
+        const mineId = regs.label[here];
+        const mine = mineId >= 0 ? regs.size[mineId] : 0;
+        const better = regs.size.some((s, id) => id !== mineId && s > Math.max(mine * 2, 150));
+        if (better && performance.now() - landedAt > 8000) {
+          if (leaveBySide(here, area)) return true;
+          return false; // sin lateral a mano: baja por su hilo, que elige zonas amplias
+        }
+        if (!far.length) { restUntil = performance.now() + 1200; return true; } // no hay a dónde ir: espera un poco
+      }
+      const cands: { i: number; score: number }[] = [];
+      for (let k = 0; k < 120; k++) {
+        const i = far[Math.floor(Math.random() * far.length)];
+        const p = grid.center(i);
+        const d = Math.hypot(p.x - hp.x, p.y - hp.y);
+        let fresh = Infinity;
+        for (const t of trail) fresh = Math.min(fresh, Math.hypot(t.x - p.x, t.y - (p.y + gridSY)));
+        const turn = Math.abs(angleDiff(yaw, Math.atan2(p.x - hp.x, p.y - hp.y)));
+        const score =
+          Math.min(fresh, reach * 1.2) - // lejos de por donde ya pasó
+          Math.abs(d - reach) * 0.35 - // ni un paso corto ni cruzar toda la pantalla
+          (turn > 2.4 ? reach * 0.6 : 0) + // sin media vuelta
+          Math.random() * reach * 0.4; // y algo de azar
+        cands.push({ i, score });
+      }
+      cands.sort((a, b) => b.score - a.score);
+      for (const { i } of cands.slice(0, 8)) {
+        const cells = grid.path(here, i);
+        if (cells && cells.length > 1) {
+          route = cells.slice(1).map(toPage);
+          remember(toPage(i));
+          note("paseo hacia " + Math.floor(i / grid.cols) + "," + (i % grid.cols));
+          return true;
+        }
+      }
+      return false;
+    }
+
+    /* ---------- Hero: perseguir el cursor ---------- */
+    function pointerInHero() {
+      if (!hero || !pointer.has) return false;
+      const b = hero.getBoundingClientRect();
+      return pointer.x >= b.left && pointer.x <= b.right && pointer.y >= Math.max(b.top, ceilingY()) && pointer.y <= b.bottom;
+    }
+    function spiderInHero(screenY: number) {
+      if (!hero) return false;
+      const b = hero.getBoundingClientRect();
+      return screenY >= b.top - pad() && screenY <= b.bottom + pad();
+    }
+    /** Ruta hacia el hueco libre más cercano al cursor, rodeando el texto (nunca lo pisa). */
+    /** false si no hay forma de llegar cerca del cursor sin pisar contenido. */
+    function planChase(here: number, now: number) {
+      lastChase = now;
+      const want = grid.cellOf(pointer.x, pointer.y + window.scrollY - gridSY);
+      const goal = grid.nearestOpen(want, undefined, cellClear);
+      if (goal < 0) { route = []; chaseGoal = -1; return false; }
+      if (goal === chaseGoal && route.length) return true; // mismo destino y sigue en camino
+      chaseGoal = goal;
+      const p = toPage(goal);
+      if (goal === here) { route = Math.hypot(p.x - page.x, p.y - page.y) > CHASE_STOP ? [p] : []; return true; }
+      const cells = grid.path(here, goal);
+      route = cells ? cells.slice(1).map(toPage) : [];
+      return !!cells;
+    }
+
+    /* ---------- Telaraña ----------
+       - Hilos de seda blancos, finos y muy combados por la gravedad (catenaria), que cruzan
+         grandes distancias entre anclas.
+       - Sobre las letras de los .anchor-point, una maraña densa de hebras cortas pegada a su
+         contorno (se calcula dónde están los bordes de cada letra).
+       - Solo deja seda por donde camina, y todo va atado al nombre: es permanente hasta Suprimir
+         y se queda quieto con él al hacer scroll. */
+    const silkLocal = new THREE.Vector3();
+    /** Punto de la página de donde sale la seda: las hileras, al final del abdomen. */
+    function silkPoint(): Anchor {
+      silkLocal.set(-46, 0, HIP_Z);
+      model.head.localToWorld(silkLocal);
+      const s = worldToScreen(silkLocal);
+      return { x: s.x, y: s.y + window.scrollY, t: time };
+    }
+    const rectOf = (el: Element) => {
+      let r = rectCache.get(el);
+      if (!r) { r = el.getBoundingClientRect(); rectCache.set(el, r); }
+      return r;
+    };
+    /** Posición en pantalla de un ancla (las atadas a un elemento siguen a ese elemento). */
+    function anchorPos(a: Anchor) {
+      if (a.el && a.ox !== undefined && a.oy !== undefined) {
+        const r = rectOf(a.el);
+        return { x: r.left + a.ox * r.width, y: r.top + a.oy * r.height };
+      }
+      return { x: a.x, y: a.y - window.scrollY };
+    }
+    /** Ata un ancla a un elemento: guarda su posición relativa a la caja del elemento. */
+    function bindTo(a: Anchor, el: Element) {
+      const r = rectOf(el);
+      if (r.width < 1 || r.height < 1) return a;
+      a.el = el;
+      a.ox = (a.x - r.left) / r.width;
+      a.oy = (a.y - window.scrollY - r.top) / r.height;
+      a.keep = true;
+      return a;
+    }
+    /** El .anchor-point más cercano a un punto de pantalla y su distancia a la caja. */
+    function nearestAnchorEl(x: number, y: number) {
+      let best: Element | null = null, bestD = Infinity;
+      for (const el of anchorEls) {
+        const r = rectOf(el);
+        if (r.width < 1 || r.bottom < 0 || r.top > H) continue;
+        const d = Math.hypot(Math.max(r.left - x, 0, x - r.right), Math.max(r.top - y, 0, y - r.bottom));
+        if (d < bestD) { bestD = d; best = el; }
+      }
+      return { el: best, d: bestD };
+    }
+
+    /* Contorno de las letras: se dibuja el texto del elemento en un canvas aparte con su misma
+       fuente y se guardan los píxeles de borde, como fracciones de su caja (sigue al resize). */
+    const edgeCache = new Map<Element, { ox: number; oy: number }[]>();
+    function glyphEdges(el: Element) {
+      const hit = edgeCache.get(el);
+      if (hit) return hit;
+      const out: { ox: number; oy: number }[] = [];
+      const r = el.getBoundingClientRect();
+      const rects = el.getClientRects();
+      if (r.width < 4 || r.height < 4 || rects.length !== 1) { edgeCache.set(el, out); return out; } // en varias líneas: sin contorno
+      const cs = getComputedStyle(el);
+      const c = document.createElement("canvas");
+      c.width = Math.ceil(r.width); c.height = Math.ceil(r.height);
+      const x = c.getContext("2d", { willReadFrequently: true });
+      if (!x) { edgeCache.set(el, out); return out; }
+      x.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+      if ("letterSpacing" in x && cs.letterSpacing !== "normal") (x as any).letterSpacing = cs.letterSpacing;
+      let text = (el.textContent || "").trim();
+      if (cs.textTransform === "uppercase") text = text.toUpperCase();
+      const m = x.measureText(text);
+      const sx = m.width > 0 ? r.width / m.width : 1; // por si la anchura medida no cuadra al píxel
+      x.setTransform(sx, 0, 0, 1, 0, 0);
+      x.fillStyle = "#000";
+      x.textBaseline = "alphabetic";
+      x.fillText(text, 0, (r.height - (m.fontBoundingBoxAscent + m.fontBoundingBoxDescent)) / 2 + m.fontBoundingBoxAscent);
+      const { data } = x.getImageData(0, 0, c.width, c.height);
+      const ink = (px: number, py: number) => px >= 0 && py >= 0 && px < c.width && py < c.height && data[(py * c.width + px) * 4 + 3] > 120;
+      const step = 3;
+      for (let py = 0; py < c.height; py += step) for (let px = 0; px < c.width; px += step) {
+        if (!ink(px, py)) continue;
+        if (!ink(px - step, py) || !ink(px + step, py) || !ink(px, py - step) || !ink(px, py + step)) out.push({ ox: px / r.width, oy: py / r.height });
+      }
+      edgeCache.set(el, out);
+      return out;
+    }
+    /** Puntos de borde de letra a menos de radius px de un punto de pantalla. */
+    function edgesNear(el: Element, x: number, y: number, radius: number) {
+      const r = rectOf(el);
+      return glyphEdges(el).filter((e) => Math.hypot(r.left + e.ox * r.width - x, r.top + e.oy * r.height - y) < radius);
+    }
+    const edgeAnchor = (el: Element, e: { ox: number; oy: number }, bead = false): Anchor =>
+      ({ x: 0, y: 0, t: time, el, ox: e.ox, oy: e.oy, keep: true, bead });
+
+    /** Cada hebra con su grosor, brillo y caída propios: ninguna es igual a otra. */
+    function addStrand(a: Anchor, b: Anchor, kind: Strand["kind"] = "trail") {
+      const keep = !!(a.keep && b.keep);
+      const fuzz = kind === "fuzz";
+      strands.push({
+        a, b, born: time, keep, kind,
+        w: fuzz ? 0.5 + Math.random() * 0.6 : 0.7 + Math.random() * 0.7,
+        alpha: fuzz ? 0.55 + Math.random() * 0.4 : 0.6 + Math.random() * 0.35,
+        // gravedad: toda la seda cuelga por su peso (la maraña corta, poco; los hilos largos, mucho)
+        sag: fuzz ? 0.6 + Math.random() * 1.4 : kind === "radial" ? 1.1 + Math.random() * 0.6 : 0.55 + Math.random() * 1.1,
+        ph: Math.random() * TAU,
+      });
+      if (keep) {
+        let kept = 0;
+        for (let i = strands.length - 1; i >= 0; i--) if (strands[i].keep && ++kept > KEEP_MAX) strands.splice(i, 1);
+      }
+    }
+    function addAnchor(p: Anchor, link: boolean) {
+      const prev = anchors[anchors.length - 1];
+      anchors.push(p);
+      if (anchors.length > WEB_MAX_ANCHORS) anchors.shift();
+      if (!link || !prev) return;
+      addStrand(prev, p);
+      // De vez en cuando, un radio hacia un ancla vieja cercana (por donde ya pasó): así sale una red y no solo un rastro
+      if (Math.random() < 0.25) {
+        const sp = anchorPos(p);
+        const far = anchors.slice(0, -4).filter((q) => { const qp = anchorPos(q); const d = Math.hypot(qp.x - sp.x, qp.y - sp.y); return d > WEB_STEP * 1.5 && d < WEB_LINK_RADIUS; });
+        if (far.length) addStrand(far[Math.floor(Math.random() * far.length)], p, "radial");
+      }
+    }
+    /** Sobre las letras (o rozándolas): teje maraña pegada a su contorno y suelta hilos a ellas. */
+    function tryAttach(p: Anchor) {
+      const sx = p.x, sy = p.y - window.scrollY;
+      const { el, d } = nearestAnchorEl(sx, sy);
+      if (!el || d > pad() + ATTACH_REACH) return;
+      if (lastAttach && Math.hypot(p.x - lastAttach.x, p.y - lastAttach.y) < ATTACH_STEP) return;
+      lastAttach = { x: p.x, y: p.y };
+      const near = edgesNear(el, sx, sy, FUZZ_RADIUS);
+      if (!near.length) {
+        // sin contorno a mano (texto en varias líneas o aún lejos): un hilo a la caja
+        return; // sin letras justo debajo: solo queda el hilo de arrastre por donde camina
+      }
+      const here = bindTo({ ...p }, el);
+      // 1. Dos o tres hilos de la araña a bordes de letra cercanos
+      for (let k = 0; k < 2 + (Math.random() < 0.5 ? 1 : 0); k++) {
+        const e = near[Math.floor(Math.random() * near.length)];
+        const a = edgeAnchor(el, e, Math.random() < 0.5);
+        addStrand(here, a);
+        attachPoints.push(a);
+      }
+      // 2. Maraña: hebras cortas entre bordes de letra próximos, que se cuelgan sobre ellas
+      for (let k = 0; k < FUZZ_PER_STEP; k++) {
+        const e1 = near[Math.floor(Math.random() * near.length)];
+        const r = rectOf(el);
+        const p1x = r.left + e1.ox * r.width, p1y = r.top + e1.oy * r.height;
+        const cands = near.filter((e) => { const dd = Math.hypot(r.left + e.ox * r.width - p1x, r.top + e.oy * r.height - p1y); return dd > 10 && dd < FUZZ_LEN; });
+        if (!cands.length) continue;
+        const e2 = cands[Math.floor(Math.random() * cands.length)];
+        addStrand(edgeAnchor(el, e1, Math.random() < 0.12), edgeAnchor(el, e2), "fuzz");
+      }
+      while (attachPoints.length > 160) attachPoints.shift();
+    }
+    /** Suprimir (Delete): borra toda la telaraña, también la atada al nombre. */
+    function clearWeb() {
+      strands = [];
+      anchors.length = 0;
+      attachPoints.length = 0;
+      lastAttach = null;
+      spinning = false;
+      dragFade = 0;
+    }
+    function updateWeb(dt: number) {
+      rectCache.clear();
+      strands = strands.filter((s) => s.keep || time - s.born < WEB_LIFE);
+      while (anchors.length && !anchors[0].keep && time - anchors[0].t > WEB_LIFE && !spinning) anchors.shift();
+      const sy0 = page.y - window.scrollY;
+      if (mode === "ground" && sleepMix < 0.5 && page.x > -spanPx() && page.x < W + spanPx() && spiderInHero(sy0)) {
+        const p = silkPoint();
+        // junto al nombre, las anclas del rastro quedan atadas a él (y son permanentes)
+        const { el, d } = nearestAnchorEl(p.x, p.y - window.scrollY);
+        // en el hero todo el rastro se ata al nombre: la red entera comparte su marco y se queda quieta con él al hacer scroll
+        if (el) bindTo(p, el);
+        const last = anchors[anchors.length - 1];
+        if (!spinning || !last) { spinning = true; addAnchor(p, false); nextWebStep = WEB_STEP * (0.6 + Math.random() * 0.8); }
+        else {
+          const lp = anchorPos(last);
+          // paso con jitter: si fuera siempre WEB_STEP, el combado saldria igual de ancho en cada tramo
+          // y en linea recta se veria como un patron repetido en vez de un rastro organico
+          if (Math.hypot(p.x - lp.x, p.y - window.scrollY - lp.y) > nextWebStep) { addAnchor(p, true); nextWebStep = WEB_STEP * (0.6 + Math.random() * 0.8); }
+        }
+        if (anchorEls.length) tryAttach(silkPoint());
+        dragFade = Math.min(1, dragFade + dt * 4);
+      } else {
+        spinning = false;
+        dragFade = Math.max(0, dragFade - dt * 2);
+      }
+    }
+    /** Hilo colgando por su peso: cuanto más largo y horizontal, más se comba (aprox. catenaria). */
+    /** Gravedad al nacer: el hilo sale tenso de las hileras, cae por su peso y rebota un poco hasta quedarse colgando. */
+    const GRAVITY_SETTLE = (age: number) => 1 - Math.exp(-age * 3.2) * Math.cos(age * 9);
+    function silk(ctx: CanvasRenderingContext2D | Path2D, ax: number, ay: number, bx: number, by: number, sag = 1, ph = 0, age = Infinity) {
+      const len = Math.hypot(bx - ax, by - ay);
+      const flat = len ? Math.abs(bx - ax) / len : 0; // un hilo vertical apenas se comba
+      const hang = Math.min(180, len * (0.05 + 0.16 * flat) * sag) * (age === Infinity ? 1 : GRAVITY_SETTLE(age));
+      const drop = hang + Math.sin(time * 0.8 + ph) * Math.min(4, len * 0.015); // y se mece apenas con el aire
+      ctx.moveTo(ax, ay);
+      ctx.quadraticCurveTo((ax + bx) / 2, (ay + by) / 2 + drop * 2, bx, by); // el punto medio de la curva baja "drop"
+    }
+    function drawWeb() {
+      if (!webCtx) return;
+      // se dibuja en coordenadas de pantalla, desplazadas al origen del lienzo (que va con el hero)
+      const o = webHost ? webHost.getBoundingClientRect() : { left: 0, top: 0 };
+      webCtx.setTransform(DPR, 0, 0, DPR, -o.left * DPR, -o.top * DPR);
+      webCtx.clearRect(o.left, o.top, webW || W, webH || H);
+      if (!strands.length && dragFade <= 0 && sleepMix <= 0.01) return;
+      webCtx.lineCap = "butt"; // sin remates redondos: no dejan puntitos en los extremos
+      // Las hebras se agrupan por grosor y opacidad: pocos trazos por fotograma aunque haya cientos
+      const shade = new Path2D();
+      const buckets = new Map<string, Path2D>();
+      for (const s of strands) {
+        const age = time - s.born;
+        const life = s.keep ? 1 : Math.min(1, (WEB_LIFE - age) / WEB_FADE);
+        const alpha = s.alpha * life * Math.min(1, age / 0.2);
+        if (alpha <= 0.02) continue;
+        const a = anchorPos(s.a), b = anchorPos(s.b);
+        if (Math.max(a.y, b.y) < -160 || Math.min(a.y, b.y) > H + 40) continue;
+        const key = `${Math.round(s.w * 3) / 3}|${Math.round(alpha * 5) / 5}`;
+        let path = buckets.get(key);
+        if (!path) { path = new Path2D(); buckets.set(key, path); }
+        silk(path, a.x, a.y, b.x, b.y, s.sag, s.ph, age);
+        silk(shade, a.x, a.y + 0.8, b.x, b.y + 0.8, s.sag, s.ph, age);
+      }
+      // sombra mínima para que la seda blanca se lea sobre el fondo claro
+      webCtx.lineWidth = 1.1;
+      webCtx.strokeStyle = `rgba(${WEB_SHADE}, 0.16)`;
+      webCtx.stroke(shade);
+      for (const [key, path] of buckets) {
+        const [w, al] = key.split("|").map(Number);
+        webCtx.lineWidth = w;
+        webCtx.strokeStyle = `rgba(${WEB_COLOR}, ${al})`;
+        webCtx.stroke(path);
+      }
+      // Hilo de arrastre: del último ancla a las hileras
+      const last = anchors[anchors.length - 1];
+      if (last && dragFade > 0 && mode === "ground") {
+        const p = silkPoint();
+        const lp = anchorPos(last);
+        webCtx.lineWidth = 0.9;
+        webCtx.strokeStyle = `rgba(${WEB_COLOR}, ${0.85 * dragFade * (1 - headMix * 0.5)})`;
+        webCtx.beginPath();
+        silk(webCtx, lp.x, lp.y, p.x, p.y - window.scrollY, 0.7);
+        webCtx.stroke();
+      }
+      // Dormida: unas "z" que suben despacio sobre la cabeza
+      if (sleepMix > 0.3 && mode === "ground") {
+        const hx = page.x + Math.sin(yaw) * spanPx() * 0.25, hy = page.y - window.scrollY + Math.cos(yaw) * spanPx() * 0.25;
+        webCtx.font = `600 ${Math.round(spanPx() * 0.16)}px ${getComputedStyle(document.body).fontFamily}`;
+        for (let k = 0; k < 3; k++) {
+          const t = (time * 0.35 + k / 3) % 1;
+          webCtx.fillStyle = `rgba(${WEB_SHADE}, ${(sleepMix - 0.3) * 1.4 * Math.sin(Math.PI * t) * 0.8})`;
+          webCtx.save();
+          webCtx.translate(hx + spanPx() * (0.15 + t * 0.35), hy - spanPx() * (0.2 + t * 0.6));
+          webCtx.scale(0.7 + t * 0.6, 0.7 + t * 0.6);
+          webCtx.fillText("z", 0, 0);
+          webCtx.restore();
+        }
+      }
+    }
+
+    /* ---------- Cabecita: al detenerse junto al cursor ---------- */
+    function updateHead(dt: number) {
+      if (!headEl) return;
+      const v = Math.hypot(vel.x, vel.y);
+      const nearCursor = Math.hypot(pointer.x - page.x, pointer.y - (page.y - window.scrollY)) < spanPx() * 2.5;
+      idleTime = IDLE_STYLE === "head" && chasing && mode === "ground" && !route.length && v < 8 && nearCursor ? idleTime + dt : 0;
+      const want = idleTime > HEAD_DELAY ? 1 : 0;
+      const wasHidden = headMix < 0.05;
+      headMix += (want - headMix) * damp(HEAD_FADE_SPEED, dt);
+      if (headMix < 0.001) headMix = 0;
+      // Al aparecer, dos parpadeos (se reinicia la animación quitando y poniendo la clase)
+      if (want && wasHidden && headMix >= 0.05) {
+        headEl.classList.remove("is-blinking");
+        void headEl.offsetWidth;
+        headEl.classList.add("is-blinking");
+      }
+      canvas.style.opacity = headMix ? String(1 - headMix) : "";
+      headEl.style.opacity = String(headMix);
+      if (!headMix) return;
+      const size = spanPx() * HEAD_SIZE;
+      headEl.style.transform = `translate(${page.x - size / 2}px, ${page.y - window.scrollY - size / 2}px) scale(${0.8 + 0.2 * headMix})`;
+    }
+
+    /* ---------- Patas ---------- */
+    const restLocal = new THREE.Vector3();
+    /** Punto de apoyo ideal de una pata, en px de documento (con algo de adelanto si camina). */
+    function restOf(l: Leg, lead: boolean) {
+      restLocal.set(Math.cos(l.ra) * l.rr * spread, Math.sin(l.ra) * l.rr * spread, 0);
+      model.head.localToWorld(restLocal);
+      const s = worldToScreen(restLocal);
+      return { x: s.x + (lead ? vel.x * 0.05 : 0), y: s.y + window.scrollY + (lead ? vel.y * 0.05 : 0) };
+    }
+    /** Coloca el pivote de la araña en el suelo, en una posición de pantalla. */
+    function placeBody(x: number, y: number, lifted = 0) {
+      screenToGround(x, y, tmp);
+      yawG.position.copy(tmp);
+      yawG.position.y = lifted;
+      yawG.rotation.y = yaw;
+      yawG.scale.setScalar(sc());
+      model.body.position.z = bob;
+      yawG.updateMatrixWorld(true);
+    }
+    function plantAll() {
+      for (const l of model.legs) { const r = restOf(l, false); l.fx = r.x; l.fy = r.y; l.k = 1; l.lift = 0; }
+    }
+
+    /** Pasos: una pata solo se mueve cuando el otro grupo está apoyado (marcha alterna). */
+    function stepLegs(dt: number) {
+      const stepping = [0, 0];
+      for (const l of model.legs) if (l.k < 1) stepping[l.group]++;
+      const thr = 30 * sc();
+      for (const l of model.legs) {
+        const r = restOf(l, true);
+        if (l.k < 1) {
+          l.k = Math.min(1, l.k + dt / STEP_TIME);
+          // golpe de servo: sube en seco, se desplaza y clava la punta
+          const q = 1 - Math.pow(1 - Math.min(1, l.k * 1.15), 3);
+          l.fx = l.sx + (r.x - l.sx) * q;
+          l.fy = l.sy + (r.y - l.sy) * q;
+          l.lift = Math.min(1, Math.sin(Math.PI * l.k) * 2.2) * 26;
+        } else {
+          if (l.servo > 0) {
+            l.servo = Math.max(0, l.servo - dt / 0.4);
+            const t = 1 - l.servo;
+            l.lift = (t < 0.25 ? t / 0.25 : t < 0.65 ? 1 : Math.max(0, 1 - (t - 0.65) / 0.2)) * 18;
+          } else l.lift = 0;
+          const d = Math.hypot(l.fx - r.x, l.fy - r.y);
+          if (d > thr * 2.4 || (d > thr && stepping[1 - l.group] === 0)) {
+            l.sx = l.fx; l.sy = l.fy; l.k = 0; l.servo = 0; stepping[l.group]++;
+          }
+        }
+      }
+    }
+
+    /* ---------- Pose: cinemática inversa de cada pata ---------- */
+    const Y = new THREE.Vector3(0, 1, 0), UP = new THREE.Vector3(0, 0, 1);
+    const vF = new THREE.Vector3(), vA = new THREE.Vector3(), vK = new THREE.Vector3();
+    const u = new THREE.Vector3(), w = new THREE.Vector3(), d3 = new THREE.Vector3(), hp = new THREE.Vector3();
+    const aim = (g: THREE.Group, from: THREE.Vector3, to: THREE.Vector3) => {
+      g.position.copy(from);
+      d3.subVectors(to, from).normalize();
+      g.quaternion.setFromUnitVectors(Y, d3);
+    };
+
+    function pose() {
+      const sy = window.scrollY;
+      const bx = mode === "drop" ? drop.x : page.x;
+      const by = mode === "drop" ? drop.y : page.y - sy;
+      placeBody(bx, by, mode === "drop" ? spanPx() * 0.08 : 0);
+
+      for (const l of model.legs) {
+        screenToGround(l.fx, l.fy - sy, vF);
+        model.head.worldToLocal(vF);
+        vF.z = l.lift;
+        hp.copy(l.hip); hp.z += bob;
+        // tobillo: encima de la punta, algo metido hacia el cuerpo
+        u.set(hp.x - vF.x, hp.y - vF.y, 0).normalize();
+        vA.copy(vF).addScaledVector(UP, TIP * 0.9).addScaledVector(u, TIP * 0.42);
+        // dos huesos: cadera → rodilla → tobillo, con la rodilla hacia arriba
+        u.subVectors(vA, hp);
+        let dist = u.length();
+        u.normalize();
+        dist = Math.min(dist, A_LEN + B_LEN - 0.5);
+        vA.copy(hp).addScaledVector(u, dist);
+        const cosA = THREE.MathUtils.clamp((A_LEN * A_LEN + dist * dist - B_LEN * B_LEN) / (2 * A_LEN * dist), -1, 1);
+        w.copy(UP).addScaledVector(u, -UP.dot(u)).normalize();
+        vK.copy(hp).addScaledVector(u, A_LEN * cosA).addScaledVector(w, A_LEN * Math.sqrt(1 - cosA * cosA));
+        aim(l.femur, hp, vK); aim(l.tibia, vK, vA); aim(l.tip, vA, vF);
+        l.knee.copy(vK);
+        l.point.copy(vA).lerp(vF, 0.85);
+      }
+
+      // Destellos (parpadean despacio, desfasados)
+      model.head.updateMatrixWorld(true);
+      const s = spanPx() / 84;
+      for (const sp of sparks) {
+        sp.s.position.copy(sp.at === "tip" ? sp.l.point : sp.l.knee);
+        model.head.localToWorld(sp.s.position);
+        sp.s.position.y += 4;
+        const tw = Math.max(0, Math.sin(time * 1.3 + sp.ph));
+        sp.s.material.opacity = tw * tw * tw * (1 - 0.7 * sleepMix);
+        sp.s.scale.setScalar((5 + 8 * tw) * s);
+      }
+      bodySpark.position.set(-58, 18, HIP_Z + 40);
+      model.head.localToWorld(bodySpark.position);
+      const tb = 0.6 + 0.4 * Math.sin(time * 0.9);
+      bodySpark.material.opacity = tb * (1 - 0.7 * sleepMix);
+      bodySpark.scale.setScalar((10 + 10 * tb) * s);
+
+      // Hilo, del borde superior de la pantalla al abdomen
+      const showThread = mode === "drop" || threadFade > 0.01;
+      thread.visible = showThread;
+      if (showThread) {
+        threadMat.opacity = (mode === "drop" ? 1 : threadFade) * 0.9;
+        screenToGround(bx, Math.max(-4, drop.ceil), tmp2);
+        tmp.set(-46, 0, HIP_Z + 10);
+        model.head.localToWorld(tmp);
+        const p = threadGeo.attributes.position as THREE.BufferAttribute;
+        p.setXYZ(0, tmp2.x, tmp2.y + tmp.y, tmp2.z);
+        p.setXYZ(1, tmp.x, tmp.y, tmp.z);
+        p.needsUpdate = true;
+      }
+    }
+
+    /* ---------- Comportamiento ---------- */
+    function update(dt: number, now: number) {
+      if (!W || !H) return;
+      time += dt;
+      const sy = window.scrollY;
+      if (mode !== "ground") { sleeping = false; sleepMix = 0; }
+
+      // La sección de al lado sube y tapa el hero (o baja y lo vuelve a revelar): se va caminando
+      // por el borde que ya tenía delante y reaparece por el contrario, como cuando sale por un
+      // lateral cualquiera (mismo mecanismo, solo que aquí lo dispara el scroll, no el paseo libre).
+      if (!edgeExit && mode === "ground" && H) {
+        const heroCover = Math.min(1, Math.max(0, sy / H));
+        if (heroCover > 0.01 && heroCover < 0.99) {
+          edgeExit = dir >= 0 ? 1 : -1;
+          edgeLock = true;
+          route = [{ x: edgeExit < 0 ? offLeft() - 10 : offRight() + 10, y: page.y }];
+          note("cambia de sección: sale por " + (edgeExit < 0 ? "izq" : "der"));
+        }
+      }
+
+      // Bajando por el hilo (anclada a la página): patas recogidas que se despliegan al llegar
+      if (mode === "drop") {
+        drop.t = Math.min(1, drop.t + dt / DROP_TIME);
+        drop.y = drop.from + (drop.to - drop.from) * easeOutBack(drop.t) - sy; // en pantalla
+        // si con el scroll su destino sale de la pantalla o algo fijo se le cruza, vuelve a elegir
+        if (drop.to - sy < 0 || drop.to - sy > H) { startDrop(drop.x); return; }
+        if (drop.y > drop.ceil + pad() * 1.3 && fixedHit(drop.x, drop.y)) { enterFromSide(-dir, drop.y); return; } // entra por detrás, sin cambiar de sentido
+        spread = 0.6 + 0.4 * ease(Math.max(0, (drop.t - 0.6) / 0.4));
+        yaw = lerpAngle(yaw, 0, damp(TURN_SPEED, dt));
+        bob = 0;
+        placeBody(drop.x, drop.y);
+        for (const l of model.legs) { const r = restOf(l, false); l.fx = r.x; l.fy = r.y; l.lift = (1 - spread) * 70; l.k = 1; }
+        if (drop.t >= 1) {
+          mode = "ground";
+          landedAt = now;
+          page.x = drop.x;
+          page.y = drop.to;
+          threadFade = 1;
+          spread = 1;
+          placeBody(drop.x, drop.to - sy);
+          plantAll();
+        }
+        return;
+      }
+
+      // Esperando fuera de la pantalla, en un lateral, a que haya una fila libre para entrar
+      if (mode === "tunnel") {
+        if (now - lastPlan > 250) {
+          lastPlan = now;
+          // tras varios intentos sin fila libre, baja por su hilo en otra parte de la pantalla
+          if (++tunnelTries > 6) { tunnelTries = 0; startDrop(Math.random() * W); return; }
+          enterFromSide(tunnelSide, H * (BAND.top + Math.random() * (BAND.bottom - BAND.top)));
+        }
+        return;
+      }
+      tunnelTries = 0;
+
+      threadFade = Math.max(0, threadFade - dt * 2);
+      spread = 1;
+      const screenY = page.y - sy;
+
+      // Mientras la página se desplaza, la araña se deja llevar: sigue en su sitio de la página
+      if (sy !== lastSY) { lastSY = sy; lastScrollAt = now; }
+      const scrolling = now - lastScrollAt < SCROLL_SETTLE;
+
+      // Solo cuando el scroll la saca del todo de la vista vuelve colgada de su hilo
+      const outMargin = spanPx() * OUT_OF_VIEW;
+      if (screenY < -outMargin || screenY > H + outMargin) {
+        chasing = false;
+        startDrop(Math.min(Math.max(page.x, 0), W));
+        return;
+      }
+      // Salió caminando por un lateral: entra por el contrario, a una altura distinta (nunca la misma)
+      if ((page.x < offLeft() + 4 && vel.x < -20) || (page.x > offRight() - 4 && vel.x > 20)) {
+        if (edgeExit) {
+          // salida por el cursor en el borde: reaparece por el lado contrario a la misma altura
+          const side = page.x < 0 ? 1 : -1;
+          edgeExit = 0;
+          enterFromSide(side, screenY);
+          return;
+        }
+        const top = H * BAND.top, bottom = H * BAND.bottom;
+        let nextY = top + Math.random() * (bottom - top);
+        if (Math.abs(nextY - screenY) < 150) {
+          nextY = screenY < (top + bottom) / 2
+            ? Math.min(bottom, screenY + 150 + Math.random() * 150)
+            : Math.max(top, screenY - 150 - Math.random() * 150);
+        }
+        enterFromSide(page.x < 0 ? 1 : -1, nextY);
+        return;
+      }
+
+      const rebuilt = refreshGrid(now);
+      const gy = page.y - gridSY; // posición en el marco de la cuadrícula
+      const onScreenX = page.x >= 0 && page.x <= W;
+      const here = grid.cellOf(page.x, gy);
+
+      // Hero: si el cursor está en el hero y ella también, lo persigue
+      const wasChasing = chasing;
+      const pointerIdle = IDLE_STYLE === "wander" && now - pointer.movedAt > SLEEP_AFTER;
+      chasing = onScreenX && now >= chaseRetryAt && pointerInHero() && spiderInHero(screenY) && !pointerIdle;
+      // Cursor pegado a un lateral: sigue caminando hacia ese lado, sale y reaparece por el contrario
+      if (chasing && !edgeExit && !edgeLock && (pointer.x < EDGE_WRAP || pointer.x > W - EDGE_WRAP)) {
+        edgeExit = pointer.x < EDGE_WRAP ? -1 : 1;
+        edgeLock = true;
+        route = [{ x: edgeExit < 0 ? offLeft() - 10 : offRight() + 10, y: page.y }];
+        note("sale por el borde " + (edgeExit < 0 ? "izq" : "der"));
+      }
+      if (edgeExit && !route.length) edgeExit = 0; // algo le cambió la ruta: vuelve a perseguir normal
+      if (edgeLock && pointer.x >= EDGE_WRAP * 1.5 && pointer.x <= W - EDGE_WRAP * 1.5) edgeLock = false;
+      if (chasing !== wasChasing && !edgeExit) { route = []; chaseGoal = -1; lastPlan = -Infinity; }
+
+      // Dormir (solo en el hero): ratón quieto más de SLEEP_AFTER y ella ya parada en su sitio.
+      // En cuanto el ratón se mueve, despierta y vuelve a perseguirlo.
+      const wantSleep =
+        IDLE_STYLE === "sleep" && onScreenX && pointerInHero() && spiderInHero(screenY) &&
+        now - pointer.movedAt > SLEEP_AFTER &&
+        (sleeping || ((!route.length || (route.length === 1 && Math.hypot(route[0].x - page.x, route[0].y - page.y) < spanPx() * 0.6)) && Math.hypot(vel.x, vel.y) < 30));
+      if (wantSleep && !sleeping) { route = []; note("se duerme"); }
+      if (!wantSleep && sleeping) { chaseGoal = -1; lastPlan = lastChase = -Infinity; note("despierta"); }
+      sleeping = wantSleep;
+      sleepMix += ((sleeping ? 1 : 0) - sleepMix) * damp(SLEEP_SPEED, dt);
+      if (sleepMix < 0.001) sleepMix = 0;
+
+      let blocked = false;
+      if (onScreenX && !scrolling) {
+        // Algo le quedó encima (el encabezado fijo, un borde tras el scroll, o el layout cambió):
+        // se aparta al hueco libre más cercano, que está a menos de un alcance de patas
+        if (fixedHit(page.x, screenY) || !grid.open(here)) {
+          blocked = true;
+          const free = grid.nearestOpen(here, undefined, cellClear);
+          if (free < 0) { startDrop(Math.min(Math.max(page.x, 0), W)); return; }
+          route = [toPage(free)];
+          chaseGoal = -1;
+        }
+        // Si cambió la cuadrícula y algún tramo de la ruta ya pisa contenido, busca otra desde aquí
+        else if (rebuilt && route.length) {
+          let prev = here;
+          for (const p of route) {
+            const c = grid.cellOf(p.x, p.y - gridSY);
+            if (!grid.open(c) || grid.blockedOnLine(prev, c) > 0) { route = []; chaseGoal = -1; lastPlan = -Infinity; break; }
+            prev = c;
+          }
+        }
+      }
+
+      if (!scrolling && !blocked && !sleeping) {
+        if (chasing && !edgeExit && (now - lastChase > CHASE_REPLAN || !route.length) && !planChase(here, now)) {
+          // el cursor está donde no puede llegar: sigue paseando y lo vuelve a intentar en un rato
+          chasing = false;
+          chaseRetryAt = now + 1500;
+        }
+        if (!chasing && !route.length && now >= restUntil && now - lastPlan > 150) {
+          lastPlan = now;
+          // destino nuevo desde donde está; solo si está encerrada baja por su hilo a otro sitio
+          if (!planWander(here) && onScreenX) { startDrop(page.x); return; }
+        }
+      }
+      // Recuerda por dónde va pasando, para no volver a pasear por ahí
+      if (now - lastTrail > 800) { lastTrail = now; remember({ x: page.x, y: page.y }); }
+
+      // Caminar por la ruta
+      let wantX = 0, wantY = 0;
+      const wp = route[0];
+      if (wp) {
+        const dx = wp.x - page.x, dy = wp.y - page.y;
+        const dist = Math.hypot(dx, dy);
+        // ¿ya pasó el punto? (lo dejó atrás respecto al siguiente tramo): no vuelve sobre sus pasos
+        const next = route[1];
+        const passed = next && (next.x - wp.x) * (page.x - wp.x) + (next.y - wp.y) * (page.y - wp.y) > 0;
+        if (dist < (route.length === 1 ? 4 : CELL) || passed) {
+          route.shift();
+          // al llegar a un destino del paseo, a veces se para un momento antes de seguir
+          if (!route.length && !chasing) restUntil = now + (Math.random() < 0.45 ? 200 + Math.random() * 700 : 0);
+        } else {
+          const targetYaw = Math.atan2(dx, dy); // pantalla abajo = +Z
+          yaw = lerpAngle(yaw, targetYaw, damp(TURN_SPEED, dt));
+          const off = Math.abs(angleDiff(yaw, targetYaw));
+          // con mucho giro pendiente, gira en el sitio antes de avanzar: así nunca da vueltas alrededor de un punto
+          const sp = off > 0.9 ? 0 : WALK_SPEED * spanPx() * Math.cos(off * 0.7);
+          wantX = (dx / dist) * sp;
+          wantY = (dy / dist) * sp;
+        }
+      }
+      vel.x += (wantX - vel.x) * damp(8, dt);
+      vel.y += (wantY - vel.y) * damp(8, dt);
+      page.x += vel.x * dt;
+      page.y += vel.y * dt;
+      const v = Math.hypot(vel.x, vel.y);
+      // dormida: cuerpo más bajo y una respiración lenta
+      bob = Math.sin(time * 18) * Math.min(1.4, v / 60) * (1 - sleepMix) + sleepMix * (-7 + Math.sin(time * 1.7) * 1.4);
+      spread = 1 - 0.38 * sleepMix; // patas recogidas bajo el cuerpo
+
+      // Ojos y destellos se apagan al dormir
+      const awake = 1 - sleepMix;
+      model.eyes.mat.emissiveIntensity = 6 * (0.1 + 0.9 * awake);
+      model.eyes.halos.forEach((m) => (m.opacity = 0.15 + 0.85 * awake));
+      model.eyes.glows.forEach((g) => (g.intensity = 1.6 * (0.1 + 0.9 * awake)));
+
+      // Si por un instante no avanza (recalculando), una pata se recoloca: nunca queda congelada
+      if (v < 5 && sleepMix < 0.05) {
+        servoTimer -= dt;
+        if (servoTimer <= 0) {
+          model.legs[Math.floor(Math.random() * model.legs.length)].servo = 1;
+          servoTimer = 0.3 + Math.random() * 0.5;
+        }
+      }
+      placeBody(page.x, page.y - sy);
+      if (sleepMix > 0.02) {
+        // pose de dormir (procedural, sin clips): las puntas se recogen despacio y se levantan un poco
+        const k = damp(5, dt);
+        for (const l of model.legs) {
+          const r = restOf(l, false);
+          l.fx += (r.x - l.fx) * k;
+          l.fy += (r.y - l.fy) * k;
+          l.lift += (sleepMix * 24 - l.lift) * k;
+          l.k = 1;
+          l.servo = 0;
+        }
+      } else stepLegs(dt);
+    }
+
+    function render() {
+      if (!W || !H) return;
+      pose();
+      renderer.render(scene, camera);
+    }
+
+    /* ---------- Bucle ---------- */
+    let raf = 0, lastT = 0;
+    function frame(t: number) {
+      const dt = Math.min(0.05, (t - lastT) / 1000 || 0.016);
+      lastT = t;
+      update(dt, t);
+      updateWeb(dt);
+      updateHead(dt);
+      render();
+      drawWeb();
+      raf = requestAnimationFrame(frame);
+    }
+    function start() {
+      if (raf || reduceMotion) return;
+      lastT = performance.now();
+      raf = requestAnimationFrame(frame);
+    }
+    function stop() {
+      cancelAnimationFrame(raf);
+      raf = 0;
+    }
+
+    /* ---------- Eventos ----------
+       Pasivos y retirables de golpe con un AbortController. Del ratón solo se copian las
+       coordenadas (nunca preventDefault ni stopPropagation): el resto de scripts interactivos
+       reciben el evento igual. El scroll se lee en el bucle (window.scrollY), sin listener. */
+    const events = new AbortController();
+    const opts = { passive: true, signal: events.signal } as const;
+    window.addEventListener("mousemove", (e) => {
+      // solo cuenta como movimiento si de verdad se movió (algunos navegadores lo disparan al hacer scroll)
+      if (!pointer.has || e.clientX !== pointer.x || e.clientY !== pointer.y) pointer.movedAt = performance.now();
+      pointer.x = e.clientX; pointer.y = e.clientY; pointer.has = true;
+    }, opts);
+    // Suprimir (Delete) borra toda la telaraña; nunca mientras se escribe en un campo
+    window.addEventListener("keydown", (e) => {
+      if (e.key !== "Delete" || e.repeat) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+      clearWeb();
+    }, opts);
+    document.addEventListener("mouseout", (e) => { if (!e.relatedTarget) pointer.has = false; }, opts); // salió de la ventana
+    window.addEventListener("resize", () => { resize(); if (!raf) render(); }, opts);
+    // Con reduced-motion no hay bucle: quieta, anclada a la página, y se redibuja al hacer scroll
+    if (reduceMotion) window.addEventListener("scroll", () => render(), opts);
+    document.addEventListener("visibilitychange", () => (document.hidden ? stop() : start()), opts);
+    document.addEventListener("astro:before-swap", () => dispose(), { once: true, signal: events.signal });
+
+    function dispose() {
+      stop();
+      events.abort();
+      model.materials.forEach((m) => m.dispose());
+      model.geometries.forEach((g) => g.dispose());
+      model.textures.forEach((t) => t.dispose());
+      sparks.forEach((sp) => sp.s.material.dispose());
+      bodySpark.material.dispose();
+      starTex.dispose();
+      threadGeo.dispose();
+      threadMat.dispose();
+      envMap.dispose();
+      renderer.dispose();
+      canvas.remove();
+      webCanvas?.remove();
+      headEl?.remove();
+    }
+
+    resize();
+    if (W && H) {
+      startDrop(W * 0.8);
+      if (reduceMotion) {
+        drop.t = 1; // sin animación: aparece ya apoyada en un hueco libre
+        update(0, performance.now());
+      }
+    }
+    render();
+    start();
+
+    // Solo en desarrollo: estado visible desde la consola
+    if (import.meta.env.DEV) {
+      let simT = performance.now();
+      (window as any).__roboticSpider = {
+        page, drop, grid, yawG,
+        get mode() { return mode; },
+        get route() { return route; },
+        get gridSY() { return gridSY; },
+        decisions,
+        get feet() { return model.legs.map((l) => ({ x: l.fx, y: l.fy })); },
+        get dir() { return dir; },
+        get chasing() { return chasing; },
+        get headMix() { return headMix; },
+        get strands() { return strands.length; },
+        get keptStrands() { return strands.filter((s) => s.keep).length; },
+        get sleeping() { return sleeping; },
+        get sleepMix() { return sleepMix; },
+        clearWeb,
+        trail,
+        /** Avanza n fotogramas a mano (para probar con la pestaña en segundo plano) */
+        tick(n = 1, dt = 1 / 60) {
+          simT = Math.max(simT, performance.now()); // no ir por detrás del bucle real
+          for (let i = 0; i < n; i++) { simT += dt * 1000; update(dt, simT); updateWeb(dt); updateHead(dt); }
+          render();
+          drawWeb();
+        },
+      };
+    }
+  }
+
+  document.querySelectorAll<HTMLCanvasElement>("canvas.robotic-spider").forEach(initRoboticSpider);
+</script>
